@@ -894,6 +894,7 @@ jobs:
             ca-certificates \
             chrony \
             iw \
+            lm-sensors \
             wireless-regdb \
             net-tools \
             libglib2.0-0 \
