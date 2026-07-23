@@ -125,6 +125,11 @@ on:
         required: false
         default: 'master'
 
+      upload_release:
+        description: 'Upload boot.img and rootfs.img.zst to GitHub Release'
+        type: boolean
+        default: true
+
 # ============================================================================
 # Build Jobs — each produces one .deb, uploaded as an artifact
 # ============================================================================
@@ -640,6 +645,9 @@ jobs:
     permissions:
       contents: read
       packages: read
+
+    outputs:
+      label: ${{ steps.partition.outputs.label }}
 
     env:
       ROOTFS_MOUNT: /mnt/rootfs
@@ -1227,11 +1235,22 @@ jobs:
           sudo umount "$ROOTFS_MOUNT/sys" 2>/dev/null || true
           echo "✓ Virtual file systems unmounted"
 
+      - name: "Fstrim RootFS"
+        run: |
+          sudo fstrim -v "$ROOTFS_MOUNT" || true
+          echo "✓ Fstrim done"
+
       - name: "Unmount Image & Set UUID"
         run: |
           sudo umount "$ROOTFS_MOUNT" 2>/dev/null || true
           tune2fs -U ee8d3593-59b1-480e-a3b6-4fefb17ee7d8 rootfs.img || true
           echo "✓ Image unmounted, UUID set"
+
+      - name: "Compress RootFS"
+        run: |
+          zstd -T0 --ultra -22 rootfs.img -o rootfs.img.zst
+          rm rootfs.img
+          echo "✓ RootFS compressed"
 
       # ----------------------------------------------------------------
       # Boot Image (custom kernel only)
@@ -1265,10 +1284,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: rootfs-${{ inputs.distro_suite }}-${{ inputs.desktop }}-${{ steps.partition.outputs.label }}
-          path: rootfs.img
+          path: rootfs.img.zst
           retention-days: 14
           if-no-files-found: error
-          compression-level: 1
+          compression-level: 0
 
       - name: "Upload Boot Image"
         uses: actions/upload-artifact@v7
@@ -1277,4 +1296,38 @@ jobs:
           path: boot.img
           retention-days: 14
           if-no-files-found: warn
-          compression-level: 1
+
+  # ==========================================================================
+  # GitHub Release
+  # ==========================================================================
+  release:
+    name: "Create GitHub Release"
+    runs-on: ubuntu-latest
+    needs: [build-rootfs]
+    if: ${{ inputs.upload_release }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: "Download RootFS"
+        uses: actions/download-artifact@v8
+        with:
+          name: rootfs-${{ inputs.distro_suite }}-${{ inputs.desktop }}-${{ needs.build-rootfs.outputs.label }}
+
+      - name: "Download Boot"
+        uses: actions/download-artifact@v8
+        with:
+          name: boot-${{ inputs.distro_suite }}-${{ inputs.desktop }}-${{ needs.build-rootfs.outputs.label }}
+
+      - name: "Create Release"
+        run: |
+          DESKTOP="${{ inputs.desktop }}"
+          TAG="${DESKTOP// /-}-${{ inputs.distro_suite }}-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "$TAG" \
+            --notes "Automated build" \
+            rootfs.img.zst boot.img
+          echo "✓ Release created: $TAG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
