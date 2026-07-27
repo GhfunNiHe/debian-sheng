@@ -974,6 +974,15 @@ jobs:
           PIN
           echo "✓ APT sources configured"
 
+      - name: "Block Snap"
+        run: |
+          sudo tee "$ROOTFS_MOUNT/etc/apt/preferences.d/nosnap" << 'PIN'
+          Package: snapd snap-confine
+          Pin: release *
+          Pin-Priority: -1
+          PIN
+          echo "✓ snapd blocked"
+
       # ----------------------------------------------------------------
       # Install Packages
       # ----------------------------------------------------------------
@@ -1157,7 +1166,7 @@ jobs:
           sudo chroot "$ROOTFS_MOUNT" apt-get install -y \
             gnome-shell gnome-session gnome-terminal \
             gdm3 firefox \
-            gnome-control-center
+            gnome-control-center gnome-backgrounds
           echo "✓ GNOME installed"
 
       - name: "Install KDE Plasma"
@@ -1165,13 +1174,22 @@ jobs:
         run: |
           sudo chroot "$ROOTFS_MOUNT" apt-get update
           if [[ "${{ inputs.plasma_mobile }}" == "true" ]]; then
-            sudo chroot "$ROOTFS_MOUNT" apt-get install -y \
-              plasma-mobile kubuntu-desktop
+            PLASMA_PACKAGE="plasma-mobile"
           else
-            sudo chroot "$ROOTFS_MOUNT" apt-get install -y \
-              kubuntu-desktop
+            PLASMA_PACKAGE="plasma-desktop"
           fi
+          sudo chroot "$ROOTFS_MOUNT" apt-get install -y \
+            "$PLASMA_PACKAGE" plasma-workspace plasma-nm \
+            sddm konsole firefox \
+            dolphin kate \
+            pipewire-alsa
           echo "✓ KDE Plasma installed"
+
+      - name: "Purge Snap"
+        run: |
+          sudo chroot "$ROOTFS_MOUNT" apt-get purge -y snapd 2>/dev/null || true
+          sudo rm -rf "$ROOTFS_MOUNT/var/lib/snapd" "$ROOTFS_MOUNT/snap" "$ROOTFS_MOUNT/var/snap"
+          echo "✓ snapd purged"
 
       - name: "Configure GDM"
         if: ${{ inputs.desktop == 'GNOME' && (!inputs.autologin) }}
