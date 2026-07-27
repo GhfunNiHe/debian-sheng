@@ -12,8 +12,7 @@ on:
         type: choice
         options:
           - noble
-          - oracular
-          - plucky
+          - resolute
         default: 'noble'
 
       desktop:
@@ -73,11 +72,6 @@ on:
           - 'dual (linux)'
           - 'custom'
         default: 'dual (linux)'
-
-      quiet_boot:
-        description: 'Enable quiet boot with Plymouth splash'
-        type: boolean
-        default: true
 
       custom_partition:
         description: 'Custom partition (required when boot_mode=custom)'
@@ -676,29 +670,14 @@ jobs:
       - name: "Parse Partition Label"
         id: partition
         run: |
-          if [[ "${{ inputs.quiet_boot }}" == "true" && "${{ inputs.desktop }}" != "server" ]]; then
-            QUIET_BOOT=true
-          else
-            QUIET_BOOT=false
-          fi
-          echo "quiet_boot_enabled=$QUIET_BOOT" >> $GITHUB_OUTPUT
-
           case "${{ inputs.boot_mode }}" in
             'single (userdata)')
               echo "label=userdata" >> $GITHUB_OUTPUT
-              if [[ "$QUIET_BOOT" == "true" ]]; then
-                echo "boot_img_pattern=boot_sheng_singleboot_plymouth.img" >> $GITHUB_OUTPUT
-              else
-                echo "boot_img_pattern=boot_sheng_singleboot.img" >> $GITHUB_OUTPUT
-              fi
+              echo "boot_img_pattern=boot_sheng_singleboot.img" >> $GITHUB_OUTPUT
               ;;
             'dual (linux)')
               echo "label=linux" >> $GITHUB_OUTPUT
-              if [[ "$QUIET_BOOT" == "true" ]]; then
-                echo "boot_img_pattern=boot_sheng_dualboot_plymouth.img" >> $GITHUB_OUTPUT
-              else
-                echo "boot_img_pattern=boot_sheng_dualboot.img" >> $GITHUB_OUTPUT
-              fi
+              echo "boot_img_pattern=boot_sheng_dualboot.img" >> $GITHUB_OUTPUT
               ;;
             'custom')
               echo "label=${{ inputs.custom_partition }}" >> $GITHUB_OUTPUT
@@ -977,10 +956,10 @@ jobs:
         run: |
           SUITE="${{ inputs.distro_suite }}"
           sudo tee "$ROOTFS_MOUNT/etc/apt/sources.list" << SOURCES
-deb http://archive.ubuntu.com/ubuntu/ ${SUITE} main universe multiverse
-deb http://archive.ubuntu.com/ubuntu/ ${SUITE}-updates main universe multiverse
-deb http://archive.ubuntu.com/ubuntu/ ${SUITE}-security main universe multiverse
-SOURCES
+          deb http://archive.ubuntu.com/ubuntu/ ${SUITE} main universe multiverse
+          deb http://archive.ubuntu.com/ubuntu/ ${SUITE}-updates main universe multiverse
+          deb http://archive.ubuntu.com/ubuntu/ ${SUITE}-security main universe multiverse
+          SOURCES
           # Mozilla PPA — native .deb Firefox (not snap)
           sudo chroot "$ROOTFS_MOUNT" bash -c "
             apt-get update
@@ -989,10 +968,10 @@ SOURCES
           "
           # Pin Mozilla PPA higher so firefox comes from there
           sudo tee "$ROOTFS_MOUNT/etc/apt/preferences.d/mozilla-firefox" << 'PIN'
-Package: firefox*
-Pin: release o=LP-PPA-mozillateam
-Pin-Priority: 1001
-PIN
+          Package: firefox*
+          Pin: release o=LP-PPA-mozillateam
+          Pin-Priority: 1001
+          PIN
           echo "✓ APT sources configured"
 
       # ----------------------------------------------------------------
@@ -1021,19 +1000,6 @@ PIN
             libgudev-1.0-0 \
             libpolkit-gobject-1-0
           echo "✓ Base packages installed"
-
-      - name: "Use Upstream Regulatory Database"
-        run: |
-          sudo chroot "$ROOTFS_MOUNT" update-alternatives --set regulatory.db /lib/firmware/regulatory.db-upstream
-          echo "✓ Upstream regulatory database selected"
-
-      - name: "Install Plymouth"
-        if: ${{ steps.partition.outputs.quiet_boot_enabled == 'true' }}
-        run: |
-          sudo chroot "$ROOTFS_MOUNT" apt-get update
-          sudo chroot "$ROOTFS_MOUNT" apt-get install -y \
-            plymouth plymouth-themes
-          echo "✓ Plymouth installed"
 
       - name: "Install All .deb Packages"
         run: |
@@ -1124,14 +1090,36 @@ PIN
           if [ "$LANG_CHOICE" = 'None (C.UTF-8)' ]; then
             echo "✓ System locale stays C.UTF-8"
           else
-            # locales package provides locale-gen and /etc/locale.gen
             sudo chroot "$ROOTFS_MOUNT" apt-get update
             sudo chroot "$ROOTFS_MOUNT" apt-get install -y locales
-            # Generate selected language + en_US.UTF-8
             sudo sed -i 's/^# *\(en_US\.UTF-8\)/\1/' "$ROOTFS_MOUNT/etc/locale.gen"
             sudo sed -i "s/^# *\\(${LANG_CHOICE//./\\.}\\)/\\1/" "$ROOTFS_MOUNT/etc/locale.gen"
             sudo chroot "$ROOTFS_MOUNT" locale-gen
             echo "LANG=$LANG_CHOICE" | sudo tee "$ROOTFS_MOUNT/etc/default/locale"
+            echo "LANGUAGE=${LANG_CHOICE%.*}:en" | sudo tee -a "$ROOTFS_MOUNT/etc/default/locale"
+
+            # Map locale to Ubuntu language pack code
+            FONTS=""
+            case "$LANG_CHOICE" in
+              zh_CN.UTF-8) LP="zh-hans"; FONTS="fonts-noto-cjk" ;;
+              zh_TW.UTF-8) LP="zh-hant"; FONTS="fonts-noto-cjk" ;;
+              ja_JP.UTF-8) LP="ja"; FONTS="fonts-noto-cjk" ;;
+              ko_KR.UTF-8) LP="ko"; FONTS="fonts-noto-cjk" ;;
+              de_DE.UTF-8) LP="de" ;;
+              fr_FR.UTF-8) LP="fr" ;;
+              es_ES.UTF-8) LP="es" ;;
+              ru_RU.UTF-8) LP="ru" ;;
+              *) LP="" ;;
+            esac
+            if [ -n "$LP" ]; then
+              sudo chroot "$ROOTFS_MOUNT" apt-get install -y language-pack-${LP}
+              if [ "${{ inputs.desktop }}" = "GNOME" ]; then
+                sudo chroot "$ROOTFS_MOUNT" apt-get install -y language-pack-gnome-${LP}
+              fi
+            fi
+            if [ -n "$FONTS" ]; then
+              sudo chroot "$ROOTFS_MOUNT" apt-get install -y $FONTS
+            fi
             echo "✓ Locale set to $LANG_CHOICE (+ en_US.UTF-8)"
           fi
 
@@ -1177,29 +1165,18 @@ PIN
         run: |
           sudo chroot "$ROOTFS_MOUNT" apt-get update
           if [[ "${{ inputs.plasma_mobile }}" == "true" ]]; then
-            PLASMA_PACKAGE="plasma-mobile"
+            sudo chroot "$ROOTFS_MOUNT" apt-get install -y \
+              plasma-mobile kubuntu-desktop
           else
-            PLASMA_PACKAGE="plasma-desktop"
+            sudo chroot "$ROOTFS_MOUNT" apt-get install -y \
+              kubuntu-desktop
           fi
-          sudo chroot "$ROOTFS_MOUNT" apt-get install -y \
-            "$PLASMA_PACKAGE" plasma-workspace plasma-nm \
-            sddm konsole firefox \
-            dolphin kate \
-            pipewire-alsa
           echo "✓ KDE Plasma installed"
-
-      - name: "Install KDE Plasma Plymouth Settings"
-        if: ${{ inputs.desktop == 'KDE Plasma' && steps.partition.outputs.quiet_boot_enabled == 'true' }}
-        run: |
-          sudo chroot "$ROOTFS_MOUNT" apt-get update
-          sudo chroot "$ROOTFS_MOUNT" apt-get install -y \
-            kde-config-plymouth plymouth-theme-breeze
-          echo "✓ KDE Plasma Plymouth settings installed"
 
       - name: "Configure GDM"
         if: ${{ inputs.desktop == 'GNOME' && (!inputs.autologin) }}
         run: |
-          sudo chroot "$ROOTFS_MOUNT" systemctl enable gdm3
+          sudo chroot "$ROOTFS_MOUNT" systemctl enable gdm
           sudo chroot "$ROOTFS_MOUNT" systemctl set-default graphical.target
           echo "✓ GDM enabled (manual login)"
 
@@ -1214,12 +1191,12 @@ PIN
         if: ${{ inputs.desktop == 'GNOME' && inputs.autologin }}
         run: |
           sudo mkdir -p "$ROOTFS_MOUNT/etc/gdm3"
-          sudo tee "$ROOTFS_MOUNT/etc/gdm3/daemon.conf" << EOF
+          sudo tee "$ROOTFS_MOUNT/etc/gdm3/custom.conf" << EOF
           [daemon]
           AutomaticLoginEnable=true
           AutomaticLogin=${{ inputs.username }}
           EOF
-          sudo chroot "$ROOTFS_MOUNT" systemctl enable gdm3
+          sudo chroot "$ROOTFS_MOUNT" systemctl enable gdm
           sudo chroot "$ROOTFS_MOUNT" systemctl set-default graphical.target
           echo "✓ GDM autologin configured for ${{ inputs.username }}"
 
@@ -1287,9 +1264,6 @@ PIN
         run: |
           PARTITION="${{ steps.partition.outputs.label }}"
           CMDLINE="root=PARTLABEL=$PARTITION"
-          if [[ "${{ steps.partition.outputs.quiet_boot_enabled }}" == "true" ]]; then
-            CMDLINE="$CMDLINE quiet splash plymouth.ignore-serial-consoles fbcon=map:1"
-          fi
           chmod +x mkbootimg
           ./mkbootimg \
             --kernel Image.gz-dtb_sheng \
