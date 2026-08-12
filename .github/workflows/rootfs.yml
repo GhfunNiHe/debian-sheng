@@ -1064,27 +1064,6 @@ jobs:
           sudo chroot "$ROOTFS_MOUNT" systemctl enable adsprpcd-sensorspd.service
           echo "✓ Sensor services enabled"
 
-      - name: "Add resizefs Service (First-Boot Auto-Expand)"
-        run: |
-          sudo tee "$ROOTFS_MOUNT/etc/systemd/system/resizefs.service" << 'EOF'
-          [Unit]
-          Description=Expand root filesystem to fill partition and self-destruct
-          After=local-fs.target
-
-          [Service]
-          Type=oneshot
-          ExecStart=/usr/bin/bash -c 'exec /usr/sbin/resize2fs $(findmnt -nvo SOURCE /)'
-          ExecStartPost=/usr/bin/systemctl disable resizefs.service
-          ExecStartPost=/usr/bin/rm -f /etc/systemd/system/resizefs.service
-          ExecStartPost=/usr/bin/systemctl daemon-reload
-          RemainAfterExit=true
-
-          [Install]
-          WantedBy=default.target
-          EOF
-          sudo chroot "$ROOTFS_MOUNT" systemctl enable resizefs.service
-          echo "✓ resizefs service added and enabled"
-
       - name: "Set Hostname"
         run: |
           echo "${{ inputs.hostname }}" | sudo tee "$ROOTFS_MOUNT/etc/hostname"
@@ -1229,7 +1208,7 @@ jobs:
       - name: "Configure fstab"
         run: |
           PARTITION="${{ steps.partition.outputs.label }}"
-          echo "PARTLABEL=$PARTITION / ext4 defaults 0 1" | \
+          echo "PARTLABEL=$PARTITION / ext4 defaults,x-systemd.growfs 0 1" | \
             sudo tee "$ROOTFS_MOUNT/etc/fstab"
           echo "✓ fstab configured: root=PARTLABEL=$PARTITION"
 
