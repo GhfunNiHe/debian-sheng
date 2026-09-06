@@ -127,7 +127,10 @@ fastboot flash boot_b boot.img
 # 3. Flash the root filesystem to the linux partition
 fastboot flash linux rootfs.img
 
-# 4. Reboot
+# 4. Switch the boot slot
+fastboot set_active b
+
+# 5. Reboot
 fastboot reboot
 ```
 
