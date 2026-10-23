@@ -989,6 +989,7 @@ jobs:
             lm-sensors \
             wireless-regdb \
             net-tools \
+            qbootctl \
             libglib2.0-0 \
             libprotobuf-c1 \
             libqmi-glib5 \
