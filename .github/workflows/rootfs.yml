@@ -125,6 +125,11 @@ on:
         required: false
         default: 'master'
 
+      publish_release:
+        description: 'Publish a GitHub Release after the build'
+        type: boolean
+        default: true
+
 # ============================================================================
 # Build Jobs — each produces one .deb, uploaded as an artifact
 # ============================================================================
@@ -637,6 +642,8 @@ jobs:
       - build-iio-sensor-proxy
       - build-sheng-sensors
       - build-sheng-devauth
+    outputs:
+      partition: ${{ steps.partition.outputs.label }}
     permissions:
       contents: read
       packages: read
@@ -712,7 +719,11 @@ jobs:
       - name: "Install Build Tools"
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap git curl
+          sudo apt-get install -y \
+            debootstrap git curl \
+            android-sdk-libsparse-utils p7zip-full
+          command -v img2simg >/dev/null || { echo "::error::img2simg is missing"; exit 1; }
+          command -v 7z >/dev/null || { echo "::error::7z is missing"; exit 1; }
           echo "✓ Build tools installed"
 
       # ----------------------------------------------------------------
@@ -1274,6 +1285,25 @@ jobs:
           echo "✓ boot.img generated (cmdline: $CMDLINE)"
 
       # ----------------------------------------------------------------
+      # Sparse + 7z (rootfs only)
+      # ----------------------------------------------------------------
+
+      - name: "Convert RootFS to Sparse"
+        run: |
+          img2simg rootfs.img rootfs.simg
+          ls -lh rootfs.img rootfs.simg
+          echo "✓ Sparse image built"
+
+      - name: "Compress RootFS (2 GiB 7z volumes)"
+        run: |
+          p7z=$(command -v 7z || command -v 7zz)
+          "$p7z" a -t7z -m0=lzma2 -mx=9 -mfb=273 -md=256m -mmt=4 -bsp1 -v2047m rootfs.simg.7z rootfs.simg
+          "$p7z" t rootfs.simg.7z.001
+          rm -f rootfs.img rootfs.simg
+          ls -lh rootfs.simg.7z.*
+          echo "✓ RootFS compressed"
+
+      # ----------------------------------------------------------------
       # Upload Final Artifacts
       # ----------------------------------------------------------------
 
@@ -1281,10 +1311,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: rootfs-${{ inputs.distro_suite }}-${{ inputs.desktop }}-${{ steps.partition.outputs.label }}
-          path: rootfs.img
+          path: rootfs.simg.7z.*
           retention-days: 14
           if-no-files-found: error
-          compression-level: 1
+          compression-level: 0
 
       - name: "Upload Boot Image"
         uses: actions/upload-artifact@v7
@@ -1294,3 +1324,55 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
           compression-level: 1
+
+  # ==========================================================================
+  # Release — publishes the built images to a GitHub Release
+  # ==========================================================================
+  release:
+    name: "Publish Release"
+    needs: build-rootfs
+    if: ${{ inputs.publish_release }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: "Resolve Release Metadata"
+        env:
+          SUITE: ${{ inputs.distro_suite }}
+          DESKTOP: ${{ inputs.desktop }}
+          PARTITION: ${{ needs.build-rootfs.outputs.partition }}
+        run: |
+          slug=$(printf '%s' "$DESKTOP" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g; s/^-//; s/-$//')
+          partition=$(printf '%s' "$PARTITION" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g; s/^-//; s/-$//')
+          stamp=$(date -u +%Y%m%d-%H%M)
+          echo "TAG=debian-${SUITE}-${slug}-${partition}-${stamp}" >> "$GITHUB_ENV"
+          echo "TITLE=Debian ${SUITE} · ${DESKTOP} (${partition}) (${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:9:2}:${stamp:11:2} UTC)" >> "$GITHUB_ENV"
+
+      - name: "Download Artifacts"
+        uses: actions/download-artifact@v8
+        with:
+          path: release
+          pattern: "{rootfs,boot}-*"
+          merge-multiple: true
+
+      - name: "Create Release"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TITLE }}
+          body: |
+            - System: Debian `${{ inputs.distro_suite }}`
+            - Desktop: `${{ inputs.desktop }}`
+            - Plasma Mobile: `${{ inputs.plasma_mobile }}`
+            - Boot mode: `${{ inputs.boot_mode }}`
+            - Partition: `${{ needs.build-rootfs.outputs.partition }}`
+            - Hostname: `${{ inputs.hostname }}`
+            - User: `${{ inputs.username }}`
+            - Kernel: `${{ inputs.kernel_source }}`
+
+            Android sparse images for Xiaomi Pad 6s Pro (Sheng). The rootfs image is split into 2 GiB 7z volumes.
+          files: release/*
+          fail_on_unmatched_files: true
+          overwrite_files: true
