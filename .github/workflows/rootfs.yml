@@ -719,11 +719,7 @@ jobs:
       - name: "Install Build Tools"
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            debootstrap git curl \
-            android-sdk-libsparse-utils p7zip-full
-          command -v img2simg >/dev/null || { echo "::error::img2simg is missing"; exit 1; }
-          command -v 7z >/dev/null || { echo "::error::7z is missing"; exit 1; }
+          sudo apt-get install -y debootstrap git curl
           echo "✓ Build tools installed"
 
       # ----------------------------------------------------------------
@@ -1285,25 +1281,6 @@ jobs:
           echo "✓ boot.img generated (cmdline: $CMDLINE)"
 
       # ----------------------------------------------------------------
-      # Sparse + 7z (rootfs only)
-      # ----------------------------------------------------------------
-
-      - name: "Convert RootFS to Sparse"
-        run: |
-          img2simg rootfs.img rootfs.simg
-          ls -lh rootfs.img rootfs.simg
-          echo "✓ Sparse image built"
-
-      - name: "Compress RootFS (2 GiB 7z volumes)"
-        run: |
-          p7z=$(command -v 7z || command -v 7zz)
-          "$p7z" a -t7z -m0=lzma2 -mx=9 -mfb=273 -md=256m -mmt=4 -bsp1 -v2047m rootfs.simg.7z rootfs.simg
-          "$p7z" t rootfs.simg.7z.001
-          rm -f rootfs.img rootfs.simg
-          ls -lh rootfs.simg.7z.*
-          echo "✓ RootFS compressed"
-
-      # ----------------------------------------------------------------
       # Upload Final Artifacts
       # ----------------------------------------------------------------
 
@@ -1311,10 +1288,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: rootfs-${{ inputs.distro_suite }}-${{ inputs.desktop }}-${{ steps.partition.outputs.label }}
-          path: rootfs.simg.7z.*
+          path: rootfs.img
           retention-days: 14
           if-no-files-found: error
-          compression-level: 0
+          compression-level: 1
 
       - name: "Upload Boot Image"
         uses: actions/upload-artifact@v7
@@ -1356,6 +1333,30 @@ jobs:
           path: release
           pattern: "{rootfs,boot}-*"
           merge-multiple: true
+
+      - name: "Install Compression Tools"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full android-sdk-libsparse-utils
+          command -v 7z >/dev/null || { echo "::error::7z is missing"; exit 1; }
+          command -v img2simg >/dev/null || { echo "::error::img2simg is missing"; exit 1; }
+          echo "✓ Compression tools installed"
+
+      - name: "Convert RootFS to Sparse"
+        run: |
+          img2simg release/rootfs.img release/rootfs.simg
+          ls -lh release/rootfs.img release/rootfs.simg
+          rm -f release/rootfs.img
+          echo "✓ Sparse image built"
+
+      - name: "Compress RootFS (2 GiB 7z volumes)"
+        run: |
+          p7z=$(command -v 7z || command -v 7zz)
+          "$p7z" a -t7z -m0=lzma2 -mx=9 -mfb=273 -md=256m -mmt=4 -bsp1 -v2047m release/rootfs.simg.7z release/rootfs.simg
+          "$p7z" t release/rootfs.simg.7z.001
+          rm -f release/rootfs.simg
+          ls -lh release/rootfs.simg.7z.*
+          echo "✓ RootFS compressed"
 
       - name: "Create Release"
         uses: softprops/action-gh-release@v2
